@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas to MP4 with Audio</title>
+    <script src="/assets/ffmpeg/package/dist/umd/ffmpeg.js"></script>
+    <script src="/assets/util/package/dist/umd/index.js"></script>
+  </head>
+  <body>
+    <canvas
+      style="width: 270px; height: 480px; background-color: black"
+      id="animationCanvas"
+      width="606"
+      height="1080"
+    ></canvas>
+    <p id="timer" style="font-size: 52px">0</p>
+    <button id="startButton">Start Encoding</button>
+    <input type="file" id="audioInput" accept="audio/*" />
+    <p id="status">Status: Waiting...</p>
+
+    <script>
+      const { fetchFile } = FFmpegUtil;
+      const { FFmpeg } = FFmpegWASM;
+
+      const canvas = document.getElementById("animationCanvas");
+      const ctx = canvas.getContext("2d");
+      const startButton = document.getElementById("startButton");
+      const audioInput = document.getElementById("audioInput");
+      const status = document.getElementById("status");
+      const timer = document.getElementById("timer");
+
+      let frames = []; // To store each frame as a Blob
+
+      function getRandomColor() {
+        var letters = "0123456789ABCDEF";
+        var color = "#";
+        for (var i = 0; i < 6; i++) {
+          color += letters[Math.floor(Math.random() * 16)];
+        }
+        return color;
+      }
+
+      // Function to draw and capture frames
+      async function drawAndCaptureFrames() {
+        const totalFrames = 30 * 58; // Total number of frames (e.g., 5 seconds at 30 FPS)
+
+        let counter = 0;
+        setInterval(() => {
+          counter++;
+          timer.textContent = counter;
+        }, 1000);
+
+        for (let i = 0; i < totalFrames; i++) {
+          // Clear canvas and draw a bouncing square
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = getRandomColor();
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Capture the frame
+          const blob = await new Promise((resolve) =>
+            canvas.toBlob(resolve, "image/png")
+          );
+          frames.push(blob);
+
+          // Simulate ~30 FPS (frame duration ~33ms)
+          // await new Promise((resolve) => setTimeout(resolve, 33));
+        }
+      }
+
+      // Function to encode frames into MP4 and add audio
+      async function encodeVideoWithAudio() {
+        status.textContent = "Status: Loading FFmpeg...";
+        const ffmpeg = new FFmpeg();
+        ffmpeg.on("log", ({ message }) => {
+          // console.log(message);
+        });
+        ffmpeg.on("progress", ({ progress }) => {
+          status.textContent = `${progress * 100} %`;
+        });
+        await ffmpeg.load({
+          coreURL: "/assets/core/package/dist/umd/ffmpeg-core.js",
+        });
+
+        status.textContent = "Status: Encoding frames...";
+
+        // Write frames to FFmpeg's virtual file system
+        for (let i = 0; i < frames.length; i++) {
+          //console.log(i, ffmpeg);
+          await ffmpeg.writeFile(`frame${i}.png`, await fetchFile(frames[i]));
+        }
+
+        // Encode frames into a video
+        await ffmpeg.exec([
+          "-framerate",
+          "30", // Frame rate
+          "-i",
+          "frame%d.png", // Input frame sequence
+          "-c:v",
+          "libx264", // Video codec
+          "-pix_fmt",
+          "yuv420p", // Pixel format for compatibility
+          "output.mp4",
+        ]);
+
+        status.textContent = "Status: Adding audio...";
+
+        // Load the selected audio file
+        const audioFile = audioInput.files[0];
+        if (!audioFile) {
+          alert("Please select an audio file!");
+          return;
+        }
+        await ffmpeg.writeFile("input.mp3", await fetchFile(audioFile));
+
+        // Merge the audio with the video
+        await ffmpeg.exec([
+          "-i",
+          "output.mp4", // Input video
+          "-i",
+          "input.mp3", // Input audio
+          "-c:v",
+          "copy", // Copy video codec
+          "-c:a",
+          "aac", // Audio codec
+          "-shortest", // Match the shortest duration
+          "final_video.mp4",
+        ]);
+
+        // Retrieve the final video
+        const data = await ffmpeg.readFile("final_video.mp4");
+        const blob = new Blob([data.buffer], { type: "video/mp4" });
+
+        // Create a download link
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "canvas_animation_with_audio.mp4";
+        a.click();
+
+        status.textContent = "Status: Done!";
+      }
+
+      startButton.addEventListener("click", async () => {
+        frames = []; // Reset frames
+        status.textContent = "Status: Capturing frames...";
+        await drawAndCaptureFrames();
+        await encodeVideoWithAudio();
+      });
+    </script>
+  </body>
+</html>
